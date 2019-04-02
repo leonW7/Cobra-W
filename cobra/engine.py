@@ -148,7 +148,7 @@ def scan_single(target_directory, single_rule, files=None, secret_name=None):
 
 def scan(target_directory, a_sid=None, s_sid=None, special_rules=None, language=None, framework=None, file_count=0,
          extension_count=0, files=None, secret_name=None):
-    r = Rule()
+    r = Rule(language)
     vulnerabilities = r.vulnerabilities
     rules = r.rules(special_rules)
     find_vulnerabilities = []
@@ -174,7 +174,7 @@ def scan(target_directory, a_sid=None, s_sid=None, special_rules=None, language=
         rule = r()
 
         if rule.status is False:
-            logger.info('[CVI_{cvi}] [STATUS] OFF, CONTINUE...'.format(cvi=rule.id))
+            logger.info('[CVI_{cvi}] [STATUS] OFF, CONTINUE...'.format(cvi=rule.svid))
             continue
         # SR(Single Rule)
         logger.debug("""[PUSH] [CVI_{cvi}] {idx}.{vulnerability}({language})""".format(
@@ -258,8 +258,64 @@ class SingleRule(object):
         logger.debug('[ENGINE] [ORIGIN] match-mode {m}'.format(m=self.sr.match_mode))
 
         # grep
-        if self.sr.match_mode == const.mm_regex_only_match or self.sr.match_mode == const.mm_regex_param_controllable:
+        if self.sr.match_mode == const.mm_regex_only_match:
+            # 当所有match都满足时成立，当单一unmatch满足时，不成立
+            matchs = self.sr.match
+            unmatchs = self.sr.unmatch
+            result = []
+            new_result = []
+            old_result = 0
+
+            try:
+                if matchs:
+                    f = FileParseAll(self.files, self.target_directory)
+
+                    for match in matchs:
+
+                        new_result = f.multi_grep(match)
+
+                        if old_result == 0:
+                            old_result = new_result
+                            result = new_result
+                            continue
+
+                        old_result = result
+                        result = []
+
+                        for old_vul in old_result:
+                            for new_vul in new_result:
+                                if new_vul[0] == old_vul[0]:
+                                    result.append(old_vul)
+
+                    for unmatch in unmatchs:
+                        uresults = f.multi_grep(unmatch)
+
+                        for uresult in uresults:
+                            for vul in result:
+                                if vul[0] == uresult[0]:
+                                    result.remove(vul)
+
+                else:
+                    result = None
+            except Exception as e:
+                traceback.print_exc()
+                logger.debug('match exception ({e})'.format(e=e))
+                return None
+
+        elif self.sr.match_mode == const.mm_regex_param_controllable:
             match = self.sr.match
+
+            try:
+                if match:
+                    f = FileParseAll(self.files, self.target_directory)
+                    result = f.grep(match)
+                else:
+                    result = None
+            except Exception as e:
+                traceback.print_exc()
+                logger.debug('match exception ({e})'.format(e=e))
+                return None
+
         elif self.sr.match_mode == const.mm_function_param_controllable:
             # param controllable
             if '|' in self.sr.match:
@@ -267,19 +323,41 @@ class SingleRule(object):
             else:
                 match = const.fpc_single.replace('[f]', self.sr.match)
 
+            try:
+                if match:
+                    f = FileParseAll(self.files, self.target_directory)
+                    result = f.grep(match)
+                else:
+                    result = None
+            except Exception as e:
+                traceback.print_exc()
+                logger.debug('match exception ({e})'.format(e=e))
+                return None
+
+        elif self.sr.match_mode == const.mm_regex_return_regex:
+
+            matchs = self.sr.match
+            unmatchs = self.sr.unmatch
+            matchs_name = self.sr.match_name
+            black_list = self.sr.black_list
+
+            result = []
+
+            try:
+                f = FileParseAll(self.files, self.target_directory)
+
+                result = f.multi_grep_name(matchs, unmatchs, matchs_name, black_list)
+                if not result:
+                    result = None
+            except Exception as e:
+                traceback.print_exc()
+                logger.debug('match exception ({e})'.format(e=e))
+                return None
+
         else:
             logger.warning('Exception match mode: {m}'.format(m=self.sr.match_mode))
+            result = None
 
-        try:
-            if match:
-                f = FileParseAll(self.files, self.target_directory)
-                result = f.grep(match)
-            else:
-                result = None
-        except Exception as e:
-            traceback.print_exc()
-            logger.debug('match exception ({e})'.format(e=e))
-            return None
         try:
             result = result.decode('utf-8')
         except AttributeError as e:
@@ -515,7 +593,7 @@ class Core(object):
                 return True
         return False
 
-    def init_repair(self):
+    def init_php_repair(self):
         """
         初始化修复函数规则
         :return: 
@@ -528,7 +606,8 @@ class Core(object):
             try:
                 a = __import__('rules.secret.' + self.secret_name, fromlist=[self.secret_name])
                 a = getattr(a, self.secret_name)
-                self.repair_dict = dict(self.repair_dict.items() + a.items())
+                self.repair_dict = self.repair_dict.copy()
+                self.repair_dict.update(a.items())
             except ImportError:
                 logger.warning('[AST][INIT] Secret_name init error... No nodule named {}'.format(self.secret_name))
 
@@ -581,7 +660,7 @@ class Core(object):
         logger.debug('[CVI-{cvi}] match-mode {mm}'.format(cvi=self.cvi, mm=self.rule_match_mode))
         if self.file_path[-3:].lower() == 'php':
             try:
-                self.init_repair()
+                self.init_php_repair()
                 ast = CAST(self.rule_match, self.target_directory, self.file_path, self.line_number,
                            self.code_content, files=self.files, rule_class=self.single_rule, repair_functions=self.repair_functions)
 
@@ -651,6 +730,32 @@ class Core(object):
             except Exception as e:
                 logger.debug(traceback.format_exc())
                 return False, 'Exception'
+
+        elif self.file_path[-3:].lower() == 'sol':
+            try:
+                ast = CAST(self.rule_match, self.target_directory, self.file_path, self.line_number,
+                           self.code_content, files=self.files, rule_class=self.single_rule,
+                           repair_functions=self.repair_functions)
+
+                # only match
+                if self.rule_match_mode == const.mm_regex_only_match:
+                    #
+                    # Regex-Only-Match
+                    # Match(regex) -> Repair -> Done
+                    #
+                    logger.debug("[CVI-{cvi}] [ONLY-MATCH]".format(cvi=self.cvi))
+                    return True, 'Regex-only-match'
+                elif self.rule_match_mode == const.mm_regex_return_regex:
+                    logger.debug("[CVI-{cvi}] [REGEX-RETURN-REGEX]".format(cvi=self.cvi))
+                    return True, 'Regex-return-regex'
+                else:
+                    logger.warn("[CVI-{cvi} [OTHER-MATCH]] sol ruls only support for Regex-only-match and Regex-return-regex...".format(cvi=self.cvi))
+                    return False, 'Unsupport Match'
+
+            except Exception as e:
+                logger.debug(traceback.format_exc())
+                return False, 'Exception'
+
 
 
 def init_match_rule(data):

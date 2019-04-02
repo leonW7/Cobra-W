@@ -3,7 +3,7 @@
 # Cobra-W
 [![GitHub (pre-)release](https://img.shields.io/github/release/LoRexxar/Cobra-W/all.svg)](https://github.com/LoRexxar/Cobra-W/releases)
 [![license](https://img.shields.io/github/license/mashape/apistatus.svg?maxAge=2592000)](https://github.com/wufeifei/cobra/blob/master/LICENSE)
-[![Build Status](https://travis-ci.org/LoRexxar/Cobra-W.svg?branch=develop)](https://travis-ci.org/LoRexxar/Cobra-W)
+[![Build Status](https://travis-ci.org/LoRexxar/Cobra-W.svg?branch=master)](https://travis-ci.org/LoRexxar/Cobra-W)
 [![Coverage Status](https://coveralls.io/repos/github/LoRexxar/Cobra-W/badge.svg?branch=master)](https://coveralls.io/github/LoRexxar/Cobra-W?branch=master)
 
 ## Introduction
@@ -87,3 +87,9 @@ python cobra.py -t ./tests/vulnerabilities/
 ## 开发文档
 
 [dev.md](./docs/dev.md)
+
+## Contributors
+
+感谢如下贡献者对本工具发展过程中的贡献：
+- Knownsec 404 Team [LoRexxar](https://github.com/LoRexxar)
+- 北邮天枢 [Sissel](https://github.com/boke1208)

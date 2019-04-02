@@ -24,7 +24,7 @@ except ImportError:
     from urllib.parse import quote
 
 
-ext_list = ['.php', '.php3', '.php4', '.php5', '.php7', '.pht', '.phs', '.phtml']
+ext_list = ['.php', '.php3', '.php4', '.php5', '.php7', '.pht', '.phs', '.phtml', '.sol']
 
 
 def file_list_parse(filelist):
@@ -90,7 +90,10 @@ def file_grep(file_path, rule_reg):
 class FileParseAll:
     def __init__(self, filelist, target):
         self.filelist = filelist
-        self.t_filelist = file_list_parse(filelist)[0]
+        if file_list_parse(filelist) is not []:
+            self.t_filelist = file_list_parse(filelist)[0]
+        else:
+            self.t_filelist = []
         self.target = target
 
     def grep(self, reg):
@@ -109,6 +112,135 @@ class FileParseAll:
                 # print line, line_number
                 if re.search(reg, line, re.I):
                     result.append((self.target + ffile, str(line_number), line))
+
+        return result
+
+    def multi_grep(self, reg):
+        """
+        多行匹配，对全文做匹配
+        :param reg: 
+        :return: 
+        """
+        result = []
+        line_number = 0
+
+        for ffile in self.t_filelist:
+            file = codecs.open(self.target+ffile, "r", encoding='utf-8', errors='ignore')
+            content = file.read()
+            file.close()
+
+            r_con_obj = re.search(reg, content, re.I)
+
+            if r_con_obj:
+                start_pos = r_con_obj.regs[0][0]
+                line_number = len(content[:start_pos].split('\n'))
+                result.append((self.target + ffile, str(line_number), r_con_obj.group(0)))
+
+        return result
+    
+    def multi_grep_content(self, reg, content):
+        content_tmp = content
+        result = []
+        while 1:
+            r_con_obj = re.search(reg, content_tmp, re.I)
+            if r_con_obj:
+                start_pos = r_con_obj.regs[0][0]
+                line_number = len(content[:start_pos].split('\n'))
+                result.append([str(line_number), r_con_obj.group(0)])
+
+                content_tmp = content_tmp[r_con_obj.regs[0][1]:]
+            else:
+                break
+        return result
+
+    def multi_grep_name(self, matchs, unmatchs, matchs_name, black_list):
+        """
+        匹配变量/函数名
+        :param matchs: 全中则为漏洞
+        :param unmatchs: 中一个则忽略漏洞
+        :param matchs_name: 匹配变量名或函数名或其他名称
+        :param black_list: 黑名单，根据reg中选择的组，过滤整个匹配结果或只过滤匹配的name
+        :return: 返回匹配结果的list
+        """
+        result = []
+
+        for ffile in self.t_filelist:
+            file = codecs.open(self.target+ffile, "r", encoding='utf-8', errors='ignore')
+            content = file.read()
+            file.close()
+            
+            # 变量名
+            name = []
+            re_result_list = re.findall(matchs_name,content)
+
+            for re_result in re_result_list:
+                re_flag = True
+                # 正确使用，即reg = '(function aloha (_to) aloha)'，re_result形如 ("function balanceOf(address owner);","_to")
+                if len(re_result) == 2:# ['owner','function xxx(address owner)']
+                    for black in black_list:
+                        if black in re_result[0] or black in re_result[1]:
+                            re_flag = False
+                            logger.debug('[DEBUG] [GREP_NAME_BLACK_LIST] match varname {0} in black list {1}'.format(re_result[0], black))
+                    if re_flag:
+                        name.append(re_result[1])
+                        logger.debug('[DEBUG] [GREP_NAME_WITH_GROUP(0)_BLACK_CHECK] success match varname:{0}'.format(re_result[0]))
+                elif len(re_result) == 1: # ['owner']
+                    for black in black_list:
+                        if black in re_result[0]:
+                            re_flag = False
+                            logger.debug('[DEBUG] [GREP_NAME_BLACK_LIST] match varname {0} in black list {1}'.format(re_result[0], black))
+                    if re_flag:
+                        name.append(re_result[0])
+                        logger.debug('[DEBUG] [GREP_NAME_SINGLE_VARNAME] success match varname:{0}'.format(re_result[0]))
+                elif isinstance(re_result,str): #字符串'owner'
+                    for black in black_list:
+                        if black in re_result:
+                            re_flag = False
+                            logger.debug('[DEBUG] [GREP_NAME_BLACK_LIST] match varname {0} in black list {1}'.format(re_result, black))
+                    if re_flag:
+                        name.append(re_result)
+                        logger.debug('[DEBUG] [GREP_NAME_STR] success match varname:{0}'.format(re_result))
+                else:
+                    name.append(re_result)
+                    logger.warning('[WARING] [GREP_NAME_ERROR] match unknown-type varname {0}'.format(re_result))
+
+            name = list(set(name))
+            for n in name:
+                if len(n) >= 32:
+                    name.remove(n)
+
+            for n in name:
+                matchs_tmp = [match.replace("=padding=", n) for match in matchs]
+                unmatchs_tmp = [unmatch.replace("=padding=", n) for unmatch in unmatchs]
+                
+                re_flag = True
+                line_number = 0
+
+                # 只要一次成功，则不是漏洞
+                for unmatch in unmatchs_tmp:
+                    result_tmp = self.multi_grep_content(unmatch, content)
+                    if result_tmp is not None and result_tmp != []:
+                        re_flag = False
+                        logger.debug('[DEBUG] [UNMATCH_REGEX_RETURN_REGEX] unmatch grep:{0} by rule {1}'.format(n, unmatch))
+                        continue
+
+                if re_flag:
+                    # 例如CVI2100中，没有match，只要不含unmatch即为漏洞的，没有行数
+                    if matchs_tmp == []:
+                        result.append(tuple([self.target+ffile, str(line_number), 'name:<'+n+'>']))
+                        logger.debug('[DEBUG] [MATCH_REGEX_RETURN_REGEX] success match:{0} in line {1}'.format(n, str(line_number)))
+                        continue
+
+                    # 正常的match，但条件为或
+                    for match in matchs_tmp:
+                        result_list_tmp = self.multi_grep_content(match, content)
+
+                        if result_list_tmp is not None and result_list_tmp != []:
+                            for result_tmp in result_list_tmp:
+                                result.append(tuple([self.target+ffile, str(line_number), 'name:<'+result_tmp[0]+'>, point:<'+result_tmp[1]+'>']))
+                                logger.debug('[DEBUG] [MATCH_REGEX_RETURN_REGEX] success match:{0} in line {1}'.format(n, str(line_number)))
+                        else:
+                            re_flag = False
 
         return result
 
